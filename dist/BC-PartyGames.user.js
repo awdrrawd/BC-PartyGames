@@ -1312,6 +1312,21 @@
         });
     }
 
+    function waitForLogin() {
+        if (typeof window.Player !== "undefined" && window.Player?.MemberNumber !== undefined) return Promise.resolve();
+        return new Promise(resolve => {
+            const removeHook = modApi.hookFunction("LoginResponse", 0, (args, next) => {
+                const result = next(args);
+                queueMicrotask(() => {
+                    if (typeof window.Player === "undefined" || window.Player?.MemberNumber === undefined) return;
+                    removeHook();
+                    resolve();
+                });
+                return result;
+            });
+        });
+    }
+
     async function loadScript(url) {
         const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
@@ -1403,8 +1418,10 @@
             name: "BCPartyGames", fullName: "BC Party Games", version: API.version,
             repository: "https://github.com/awdrrawd/BC-PartyGames",
         }, { allowReplace: false });
+        console.log(`[BC PartyGames] v${API.version} loaded`);
 
-        await waitFor(() => window.Player?.MemberNumber !== undefined && typeof window.ChatRoomMessage === "function");
+        await waitForLogin();
+        await waitFor(() => typeof window.ChatRoomMessage === "function");
         await ensureSharedSystems();
         modules.ui.installStyles();
         transport = new modules.transport.Transport(modApi, () => Number(window.Player?.MemberNumber));
@@ -1423,7 +1440,6 @@
             controller, version: API.version, destroy,
         });
         localMessage("loaded");
-        console.log(`[BC PartyGames] v${API.version} loaded`);
     }
 
     function destroy() {
