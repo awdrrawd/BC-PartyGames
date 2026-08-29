@@ -10,7 +10,7 @@ const sourceFiles = [
   "src/controller.js",
   "src/ui.js",
   "Translation/PartyGames-i18n.js",
-  "src/main.js",
+  "src/app.js",
 ];
 const metadata = fs.readFileSync(path.join(root, "userscript.meta.js"), "utf8").trim();
 const source = sourceFiles.map(file => {

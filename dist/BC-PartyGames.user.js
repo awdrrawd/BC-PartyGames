@@ -1288,14 +1288,15 @@
     root.Liko?.__Sys_i18n__?.register?.("BCPG", strings);
 })(typeof globalThis !== "undefined" ? globalThis : window);
 
-// ---- src/main.js ----
+// ---- src/app.js ----
 (function startBCPartyGames(root) {
     "use strict";
     if (typeof window === "undefined") return;
     window.Liko = window.Liko || {};
     if (window.Liko.BCPartyGames?.loaded || window.Liko.BCPartyGames?.loading) return;
 
-    const API = window.Liko.BCPartyGames = { version: "0.2.1", loading: true, loaded: false };
+    const API = window.Liko.BCPartyGames = window.Liko.BCPartyGames || {};
+    Object.assign(API, { version: "0.2.1", loading: true, loaded: false });
     const modules = root.BCPartyGamesModules;
     const LIKO_BASE = window.LikoDevBase || "https://raw.githubusercontent.com/awdrrawd/liko-Plugin-Repository/main/Plugins/";
     let modApi, transport, controller, ui, renderTimer;
