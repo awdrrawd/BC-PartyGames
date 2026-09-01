@@ -95,9 +95,22 @@
         if (!card || state.phase !== "playing") return false;
         if (card.color === "wild") return true;
         const top = state.discardPile[state.discardPile.length - 1];
-        return card.color === state.activeColor
-            || card.kind === top?.kind && card.kind !== "number"
-            || card.kind === "number" && top?.kind === "number" && card.value === top.value;
+
+        // Check color match
+        const colorMatch = card.color === state.activeColor;
+
+        // Check kind match (for action cards)
+        const kindMatch = card.kind === top?.kind && card.kind !== "number";
+
+        // Check number match
+        const numberMatch = card.kind === "number" && top?.kind === "number" && card.value === top.value;
+
+        // Apply jump-in rule: if enabled, allow playing exact match out of turn
+        if (state.rules.jumpIn && card.id && state.hands[String(localId ?? -1)]?.some(c => c.id === card.id)) {
+            // This would be handled in the play attempt logic, not here
+        }
+
+        return colorMatch || kindMatch || numberMatch;
     }
 
     function hasColorMatch(hand, activeColor, excludedCardId) {
