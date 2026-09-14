@@ -6,6 +6,13 @@
 
     const CARD_COLORS = { red: "#d72638", yellow: "#f7c948", green: "#159447", blue: "#1769c2", wild: "#181818" };
     const SYMBOLS = { skip: "⊘", reverse: "↻", draw2: "+2", wild: "W", wild4: "+4" };
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    const RULE_FIELDS = [
+        ["startingHandSize", [3, 5, 7, 9]], ["turnSeconds", [15, 30, 45, 60, 90, 120]],
+        ["reconnectSeconds", [15, 30, 60, 120, 180]], ["voteSeconds", [15, 30, 60, 120]],
+        ["voteCooldownSeconds", [30, 60, 180, 300, 600]],
+        ["stacking"], ["drawUntilPlayable"], ["playDrawnCard"], ["forcePlay"], ["strictWildFour"],
+    ];
 
     class GameUI {
         constructor({ controller, t }) {
@@ -21,6 +28,21 @@
             this.pendingWildCardId = null;
             this.settingsOpen = false;
             this.opened = false;
+            this.avatars = new Map();
+            this.avatarImages = new Map();
+            this.avatarDirty = new Set();
+            this.avatarUnhooks = [];
+            this.lobbyMarkup = "";
+            this.keyHandler = event => {
+                if (!this.opened) return;
+                if (event.key === "Escape") { if (this.pendingWildCardId) { this.pendingWildCardId = null; this.render(); } else this.toggle(false); }
+                if (event.key === "Tab") {
+                    const focusable = [...this.root.querySelectorAll('button:not(:disabled), select:not(:disabled), input:not(:disabled)')].filter(el => el.getClientRects().length);
+                    const first = focusable[0], last = focusable.at(-1);
+                    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+                    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+                }
+            };
             this.unsubscribe = controller.onChange(() => this.resize());
             this.resizeHandler = () => this.resize();
         }
@@ -29,15 +51,21 @@
             if (this.root) return;
             const root = document.createElement("div");
             root.id = "bcpg-overlay";
-            root.innerHTML = `<div class="bcpg-window"><div class="bcpg-title"><span>${this.t("title")}</span><button data-act="close">×</button></div><canvas></canvas><div class="bcpg-toolbar"></div></div>`;
+            root.innerHTML = `<div class="bcpg-window" role="dialog" aria-modal="true" aria-label="${escapeHtml(this.t("title"))}"><div class="bcpg-title"><span>♠ &nbsp; ${escapeHtml(this.t("title"))}</span><button data-act="close" aria-label="${escapeHtml(this.t("close"))}">×</button></div><div class="bcpg-lounge"></div><div class="bcpg-table-scroll"><canvas></canvas></div><div class="bcpg-toolbar"></div></div>`;
             document.body.appendChild(root);
             this.root = root;
             this.canvas = root.querySelector("canvas");
             this.ctx = this.canvas.getContext("2d");
             this.toolbar = root.querySelector(".bcpg-toolbar");
+            this.lounge = root.querySelector(".bcpg-lounge");
+            root.addEventListener("change", event => {
+                const key = event.target.dataset.rule;
+                if (key) this.controller.updateRules({ [key]: event.target.type === "checkbox" ? event.target.checked : Number(event.target.value) });
+            });
             root.addEventListener("click", event => this.click(event));
             this.canvas.addEventListener("click", event => this.canvasClick(event));
             window.addEventListener("resize", this.resizeHandler);
+            window.addEventListener("keydown", this.keyHandler);
             this.resize();
         }
 
@@ -45,7 +73,8 @@
             this.mount();
             this.opened = force == null ? !this.opened : !!force;
             this.root.classList.toggle("open", this.opened);
-            if (this.opened) this.render();
+            if (this.opened) { this.previousFocus = document.activeElement; this.resize(); this.root.querySelector("button")?.focus(); }
+            else this.previousFocus?.focus?.();
         }
 
         resize() {
@@ -55,10 +84,10 @@
             const viewportHeight = viewport?.height || window.innerHeight;
             const fullTable = !!this.controller.state;
             const width = fullTable
-                ? Math.min(1080, Math.max(620, viewportWidth - 70))
-                : Math.min(680, Math.max(420, viewportWidth - 100));
+                ? Math.min(1080, Math.max(820, viewportWidth - 40))
+                : Math.min(880, Math.max(280, viewportWidth - 24));
             const height = fullTable
-                ? Math.min(width / 2, Math.max(300, viewportHeight - 160))
+                ? 560
                 : Math.min(380, Math.max(280, viewportHeight - 220));
             this.root?.classList.toggle("bcpg-compact", !fullTable);
             const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -73,7 +102,16 @@
 
         render() {
             if (!this.opened || !this.ctx) return;
+            const roomIds = new Set((globalThis.ChatRoomCharacter || []).map(c => Number(c.MemberNumber)));
+            roomIds.add(Number(globalThis.Player?.MemberNumber));
+            for (const id of new Set([...this.avatars.keys(), ...this.avatarDirty])) {
+                if (!roomIds.has(id)) { this.avatars.delete(id); this.avatarImages.delete(id); this.avatarDirty.delete(id); }
+            }
             const snap = this.controller.snapshot();
+            this.lounge.hidden = !!snap.state;
+            this.root.querySelector(".bcpg-table-scroll").hidden = !snap.state;
+            if (!snap.state) { this.renderLounge(snap); this.renderToolbar(snap); return; }
+            if (this.pendingWildCardId && (core.currentPlayer(snap.state)?.memberNumber !== snap.localId || snap.state.phase !== "playing" || !(snap.state.hands[String(snap.localId)] || []).some(c => c.id === this.pendingWildCardId))) this.pendingWildCardId = null;
             this.hitCards = [];
             this.hitPeers = [];
             this.hitWelcomeActions = [];
@@ -84,12 +122,112 @@
             this.renderToolbar(snap);
         }
 
+        avatarUrl(player) {
+            const id = Number(player.memberNumber);
+            if (this.avatars.has(id) && !this.avatarDirty.has(id)) return this.avatars.get(id) || "";
+            const character = globalThis.ChatRoomCharacter?.find(c => Number(c.MemberNumber) === id) || (Number(globalThis.Player?.MemberNumber) === id ? globalThis.Player : null);
+            if (!character) return "";
+            this.avatars.set(id, this.avatars.get(id) || "");
+            if (!character?.Canvas?.width || character.MustDraw) { this.avatarDirty.add(id); return this.avatars.get(id); }
+            const url = this.captureFace(character);
+            this.avatarDirty.delete(id);
+            if (!url) return this.avatars.get(id) || "";
+            if (url !== this.avatars.get(id)) {
+                this.avatars.set(id, url);
+                const img = new Image();
+                img.onload = () => {
+                    if (this.avatars.get(id) !== url) return;
+                    this.avatarImages.set(id, img); this.render();
+                };
+                img.src = url;
+            }
+            return url;
+        }
+
+        installAvatarHooks(modApi) {
+            if (this.avatarUnhooks.length) return;
+            const hooks = [
+                ["ChatRoomSyncSingle", data => data?.Character?.MemberNumber],
+                ["ChatRoomSyncItem", data => data?.Item?.Target],
+                ["ChatRoomSyncExpression", data => data?.MemberNumber],
+                ["ChatRoomSyncPose", data => data?.MemberNumber],
+                ["CharacterLoadCanvas", character => character?.MemberNumber],
+            ];
+            for (const [name, memberOf] of hooks) {
+                if (typeof globalThis[name] !== "function") continue;
+                this.avatarUnhooks.push(modApi.hookFunction(name, 0, (args, next) => {
+                    const result = next(args);
+                    const id = Number(memberOf(args[0]));
+                    if (Number.isSafeInteger(id) && (globalThis.ChatRoomCharacter || []).some(c => Number(c.MemberNumber) === id)) {
+                        this.avatarDirty.add(id);
+                        // Coalesce updates and let the current BC update finish before reading its canvas.
+                        if (!this.avatarRenderQueued) {
+                            this.avatarRenderQueued = true;
+                            queueMicrotask(() => { this.avatarRenderQueued = false; if (this.root) this.render(); });
+                        }
+                    }
+                    return result;
+                }));
+            }
+        }
+
+        captureFace(character) {
+            // Crop the already-rendered room character; no network, database or other plugin.
+            const source = character?.Canvas;
+            if (!source?.width || source.height < 950 || character.MustDraw) return "";
+            try {
+                const canvas = document.createElement("canvas"); canvas.width = canvas.height = 100;
+                const ctx = canvas.getContext("2d"); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+                ctx.fillStyle = "#24354b"; ctx.fillRect(0, 0, 100, 100);
+                ctx.drawImage(source, source.width / 2 - 105, 740, 210, 210, 0, 0, 100, 100);
+                return canvas.toDataURL("image/webp", .9);
+            } catch (_) { return ""; }
+        }
+
+        playerMarkup(player, detail, action = "") {
+            const url = this.avatarUrl(player);
+            return `<div class="bcpg-player"><span class="bcpg-avatar">${url ? `<img src="${escapeHtml(url)}" referrerpolicy="no-referrer" alt="" loading="lazy">` : escapeHtml(Array.from(player.name || "?")[0])}</span><div class="bcpg-player-info"><strong>${escapeHtml(player.name)}</strong><small>#${player.memberNumber} · ${escapeHtml(detail)}</small></div>${action}</div>`;
+        }
+
+        renderLounge(snap) {
+            const { lobby, peers, localId, isHost, pendingInvite, joining, outgoingInvites } = snap;
+            const tr = key => escapeHtml(this.t(key));
+            const button = (act, key, disabled = false, extra = "") => `<button data-act="${act}" ${disabled ? "disabled" : ""} ${extra}>${tr(key)}</button>`;
+            let content = `<div class="bcpg-hero"><span class="bcpg-eyebrow">PARTY GAMES / UNO</span><h2>${tr(lobby ? "unoLobby" : "welcome")}</h2><p>${tr(lobby ? "lobbyHint" : "welcomeHint")}</p><span class="bcpg-badge">2–10 ${tr("playersLabel")} · 108 ${tr("cardsLabel")}</span></div>`;
+            if (joining) content += `<div class="bcpg-notice" role="status">${tr("joining")}</div>`;
+            if (pendingInvite) content += `<section class="bcpg-invitation">${this.playerMarkup({ memberNumber: pendingInvite.hostId, name: pendingInvite.hostName }, this.t("inviteFrom", { name: pendingInvite.hostName }))}<p>${escapeHtml(this.rulesSummary(pendingInvite.rules))}</p><div class="bcpg-actions">${button("invite-accept", "acceptInvite")}${button("invite-decline", "declineInvite")}</div></section>`;
+            if (lobby) {
+                content += `<div class="bcpg-lobby-grid"><section><h3>${escapeHtml(this.t("playersCount", { count: lobby.players.length }))} / 10</h3><div class="bcpg-player-list">${lobby.players.map(p => this.playerMarkup(p, [p.memberNumber === lobby.hostId ? this.t("host") : "", p.ready ? this.t("ready") : this.t("notReady")].filter(Boolean).join(" · "))).join("")}</div></section><section class="bcpg-rules"><h3>${tr("rulesTitle")}</h3><p>${tr("rulesHint")}</p>${RULE_FIELDS.map(([key, values]) => `<label><span>${tr("rule_" + key)}</span>${values ? `<select data-rule="${key}" ${isHost ? "" : "disabled"}>${[...new Set([...values, lobby.rules[key]])].sort((a,b) => a-b).map(v => `<option value="${v}" ${v === lobby.rules[key] ? "selected" : ""}>${v}</option>`).join("")}</select>` : `<input type="checkbox" data-rule="${key}" ${lobby.rules[key] ? "checked" : ""} ${isHost ? "" : "disabled"}>`}</label>`).join("")}<small>${tr("stackingHint")}</small></section></div>`;
+            }
+            if ((!lobby || isHost) && !joining && !pendingInvite) {
+                const candidates = peers.filter(p => !lobby?.players.some(joined => joined.memberNumber === p.memberNumber));
+                content += `<section><h3>${tr("installedPlayers")} <span class="bcpg-badge">${candidates.length}</span></h3><div class="bcpg-player-list">${candidates.length ? candidates.map(p => {
+                    const invitation = outgoingInvites.get(p.memberNumber);
+                    return this.playerMarkup(p, invitation ? this.t(invitation.acknowledged ? "inviteWaiting" : "inviteSending") : this.t("available"), button("invite-member", invitation ? "inviteWaiting" : "invite", !!invitation || (lobby?.players.length >= 10), `data-member="${p.memberNumber}"`));
+                }).join("") : `<p class="bcpg-empty">${tr("noInstalledPlayers")}</p>`}</div></section>`;
+            }
+            if (content !== this.lobbyMarkup) {
+                const sessionKey = lobby?.lobbyId || "welcome";
+                const scroll = this.loungeSession === sessionKey ? this.lounge.scrollTop : 0;
+                this.loungeSession = sessionKey;
+                const key = document.activeElement?.dataset.rule;
+                this.lounge.innerHTML = content; this.lobbyMarkup = content;
+                this.lounge.scrollTop = scroll;
+                if (key) this.lounge.querySelector(`[data-rule="${key}"]`)?.focus({ preventScroll: true });
+                this.lounge.querySelectorAll("img").forEach(img => img.addEventListener("error", () => { img.replaceWith(document.createTextNode("♟")); }, { once: true }));
+            }
+        }
+
+        rulesSummary(rules = {}) {
+            return `${this.t("rule_startingHandSize")}: ${rules.startingHandSize || 7} · ${this.t("rule_turnSeconds")}: ${rules.turnSeconds || 45} · ${RULE_FIELDS.filter(([key, values]) => !values && rules[key]).map(([key]) => this.t("rule_" + key)).join(" / ")}`;
+        }
+
         drawTable() {
             const ctx = this.ctx, w = this.width, h = this.height;
             const gradient = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, Math.max(w, h));
-            gradient.addColorStop(0, "#176b48"); gradient.addColorStop(1, "#073623");
+            gradient.addColorStop(0, "#255c59"); gradient.addColorStop(1, "#101f2b");
             ctx.fillStyle = gradient; ctx.fillRect(0, 0, w, h);
-            ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.lineWidth = 2;
+            ctx.strokeStyle = "rgba(255,255,255,.025)"; ctx.lineWidth = 1;
             for (let x = 0; x < w; x += 44) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
         }
 
@@ -158,21 +296,34 @@
             const spacing = w / Math.max(1, opponents.length);
             opponents.forEach((player, i) => {
                 const x = spacing * i + spacing / 2, y = 105;
+                this.avatarUrl(player);
+                const avatar = this.avatarImages.get(player.memberNumber);
+                ctx.save(); ctx.beginPath(); ctx.arc(x, y + 35, 21, 0, Math.PI * 2); ctx.clip();
+                ctx.fillStyle = "#344c60"; ctx.fillRect(x - 21, y + 14, 42, 42);
+                if (avatar) ctx.drawImage(avatar, x - 21, y + 14, 42, 42);
+                else { ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif"; ctx.fillText(Array.from(player.name || "?")[0], x, y + 41); }
+                ctx.restore();
                 const count = state.hands[String(player.memberNumber)]?.length || 0;
                 ctx.fillStyle = player.status === "disconnected" ? "#ffadad" : player.status === "lost" ? "#999" : "#fff";
                 ctx.font = "600 17px sans-serif";
-                ctx.fillText(`${player.name} · ${this.t("cardsCount", { count })}`, x, y);
-                if (player.memberNumber === state.hostId) { ctx.fillStyle = "#f7c948"; ctx.fillText("★", x, y + 24); }
-                this.drawBacks(x, y + 36, Math.min(count, 12));
+                let name = player.name;
+                const suffix = ` · ${this.t("cardsCount", { count })}`;
+                while (name.length > 1 && ctx.measureText(name + suffix).width > spacing - 12) name = name.slice(0, -1);
+                ctx.fillText(`${name}${name !== player.name ? "…" : ""}${suffix}`, x, y, spacing - 8);
+                if (player.memberNumber === state.hostId) { ctx.fillStyle = "#f7c948"; ctx.fillText("★", x + 28, y + 35); }
+                this.drawBacks(x, y + 64, Math.min(count, 12));
             });
 
             const top = state.discardPile[state.discardPile.length - 1];
-            const centerY = h / 2 - 70, deckX = w / 2 - 132, discardX = w / 2 + 36;
+            const centerY = 236, deckX = w / 2 - 132, discardX = w / 2 + 36;
             this.drawDeck(ctx, deckX, centerY, 96, 140, state.drawPile.length);
             this.drawCard(ctx, top, discardX, centerY, 96, 140, false);
             ctx.fillStyle = CARD_COLORS[state.activeColor] || "#fff";
             ctx.beginPath(); ctx.arc(discardX + 120, centerY + 70, 16, 0, Math.PI * 2); ctx.fill();
             ctx.strokeStyle = "#fff"; ctx.stroke();
+            ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+            ctx.fillText(this.t("color_" + state.activeColor), discardX + 120, centerY + 104);
+            if (state.pendingDraw) ctx.fillText(this.t("pendingDraw", { count: state.pendingDraw }), w / 2, centerY - 12);
             if (state.phase === "playing" && active?.memberNumber === localId && !state.drawnThisTurn) {
                 ctx.fillStyle = "#fff"; ctx.font = "700 15px sans-serif"; ctx.textAlign = "center";
                 ctx.fillText(this.t("clickToDraw"), deckX + 48, centerY + 162);
@@ -188,6 +339,7 @@
             hand.forEach((card, i) => {
                 const x = start + i * step, y = h - cardH - 18;
                 const playable = active?.memberNumber === localId && core.canPlayCard(card, state)
+                    && !(card.kind === "wild4" && state.rules.strictWildFour && !state.pendingDraw && hand.some(c => c.id !== card.id && c.color === state.activeColor))
                     && (!state.drawnThisTurn || !state.playableDrawnCardId || card.id === state.playableDrawnCardId);
                 this.drawCard(ctx, card, x, y - (playable ? 10 : 0), cardW, cardH, playable);
                 this.hitCards.push({ x, y: y - (playable ? 10 : 0), w: cardW, h: cardH, card, playable });
@@ -293,37 +445,42 @@
             ctx.fillText(this.t(vote.kind === "restart" ? "voteRestartStatus" : "voteEndStatus", { yes, total: eligible, seconds }), this.width / 2, 111);
         }
 
-        renderToolbar({ lobby, state, localId, isHost, peers, pendingInvite }) {
+        renderToolbar({ lobby, state, localId, isHost, peers, pendingInvite, joining }) {
             const buttons = [];
             if (!lobby && !state) {
                 if (pendingInvite) { buttons.push(["invite-accept", "acceptInvite"]); buttons.push(["invite-decline", "declineInvite"]); }
-                else if (peers.length) buttons.push(["invite", "invitePlayer"]);
-                else buttons.push(["refresh", "refreshPlayers"]);
+                else if (!joining) { buttons.push(["create", "createLobby"]); buttons.push(["refresh", "refreshPlayers"]); }
             }
             if (lobby) {
                 if (!lobby.players.some(p => p.memberNumber === localId)) buttons.push(["join", "joinLobby"]);
-                if (isHost) buttons.push(["start", "startGame", lobby.players.length < 2]);
+                if (isHost) { buttons.push(["start", "startGame", lobby.players.length < 2 || lobby.players.some(p => !p.ready)]); buttons.push(["refresh", "refreshPlayers"]); }
+                else buttons.push(["ready", lobby.players.find(p => p.memberNumber === localId)?.ready ? "cancelReady" : "ready"]);
                 buttons.push(["leave", "leave"]);
             }
             if (state) {
                 const myTurn = state.phase === "playing" && core.currentPlayer(state)?.memberNumber === localId;
+                if (myTurn && !state.drawnThisTurn) buttons.push(["draw", "drawCard"]);
                 if (myTurn && state.drawnThisTurn) buttons.push(["pass", "pass"]);
+                if (state.phase === "finished") { buttons.push(["vote-restart", "voteRestart", !!state.vote]); buttons.push(["leave", "leave"]); }
                 if (state.vote && state.vote.votes[String(localId)] == null) {
                     buttons.push(["vote-yes", "yes"]); buttons.push(["vote-no", "no"]);
                 }
             }
             buttons.push(["close", "close"]);
-            this.toolbar.innerHTML = buttons.map(([act, key, disabled]) => `<button data-act="${act}" ${disabled ? "disabled" : ""}>${this.t(key)}</button>`).join("");
+            const markup = buttons.map(([act, key, disabled]) => `<button data-act="${act}" ${disabled ? "disabled" : ""}>${escapeHtml(this.t(key))}</button>`).join("");
+            if (this.toolbar.innerHTML !== markup) this.toolbar.innerHTML = markup;
         }
 
         click(event) {
             const act = event.target.closest("[data-act]")?.dataset.act;
             if (!act) return;
+            if (act === "invite-member") return this.controller.invite(Number(event.target.closest("[data-member]").dataset.member));
+            if (act === "ready") return this.controller.setReady(!this.controller.lobby.players.find(p => p.memberNumber === this.controller.localId)?.ready);
             if (act === "close") return this.toggle(false);
             if (act === "invite") return this.chooseInvitee();
             if (act === "invite-accept") return this.controller.acceptInvite();
             if (act === "invite-decline") return this.controller.declineInvite();
-            if (act === "refresh") return this.controller.transport.send("HELLO", { version: "0.2.1", name: this.controller.localPlayer().name });
+            if (act === "refresh") return this.controller.transport.send("HELLO", { version: "0.3.0", name: this.controller.localPlayer().name });
             if (act === "create") this.controller.createLobby();
             else if (act === "join") this.controller.joinLobby();
             else if (act === "start") this.controller.startGame();
@@ -351,7 +508,7 @@
                 }
                 return;
             }
-            const welcomeAction = this.hitWelcomeActions.find(hit => x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h);
+            const welcomeAction = [...this.hitWelcomeActions].reverse().find(hit => x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h);
             if (welcomeAction?.action === "invite-accept") return this.controller.acceptInvite();
             if (welcomeAction?.action === "invite-decline") return this.controller.declineInvite();
             if (welcomeAction?.action === "draw") return this.controller.requestDraw();
@@ -360,6 +517,7 @@
             if (welcomeAction?.action === "vote-end") return this.controller.startVote("end");
             if (welcomeAction?.action === "transfer") return this.chooseHost();
             if (welcomeAction?.action === "leave") return this.controller.leave();
+            if (this.settingsOpen) return;
             const peer = this.hitPeers.find(hit => x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h);
             if (peer) return this.controller.invite(peer.memberNumber);
             const hit = [...this.hitCards].reverse().find(card => x >= card.x && x <= card.x + card.w && y >= card.y && y <= card.y + card.h);
@@ -403,6 +561,10 @@
 
         destroy() {
             this.unsubscribe?.(); window.removeEventListener("resize", this.resizeHandler);
+            window.removeEventListener("keydown", this.keyHandler);
+            for (const unhook of this.avatarUnhooks) unhook();
+            this.avatarUnhooks = [];
+            this.avatars.clear(); this.avatarImages.clear(); this.avatarDirty.clear();
             this.root?.remove(); this.root = null;
         }
     }
@@ -417,6 +579,16 @@
 #bcpg-overlay canvas{display:block!important;position:relative!important;inset:auto!important;z-index:1!important;min-height:0;max-width:100%;flex:1 1 auto}.bcpg-toolbar{position:relative;z-index:3;min-height:52px;padding:7px;display:flex;gap:7px;justify-content:center;align-items:center;flex-wrap:wrap;background:#24170c;flex:0 0 auto;box-sizing:border-box}
 .bcpg-toolbar button{padding:8px 14px;border:1px solid #e5c675;border-radius:6px;background:#6e451e;color:#fff;font-weight:700;cursor:pointer}.bcpg-toolbar button:hover{background:#93622f}.bcpg-toolbar button:disabled{opacity:.45;cursor:not-allowed}
 #bcpg-chat-button img{width:70%;height:70%;object-fit:contain}
+#bcpg-overlay{background:rgba(8,13,23,.78);backdrop-filter:blur(8px);font-family:Inter,"Noto Sans TC",system-ui,sans-serif}
+#bcpg-overlay *{box-sizing:border-box}.bcpg-window{width:1080px;background:#101b29;border:1px solid #42546b;border-radius:20px;box-shadow:0 28px 100px #0009}.bcpg-compact .bcpg-window{width:880px}
+.bcpg-title{height:58px;min-height:58px;background:#142131;padding:0 22px;letter-spacing:.4px;border-bottom:1px solid #ffffff12}.bcpg-title span{font-size:17px}.bcpg-title button{width:36px;height:36px;border-radius:10px}
+.bcpg-lounge{padding:26px;overflow:auto;min-height:0;color:#e9eef7}.bcpg-lounge[hidden],.bcpg-table-scroll[hidden]{display:none!important}.bcpg-table-scroll{overflow:auto;min-height:0;flex:1 1 auto}.bcpg-table-scroll canvas{max-width:none!important;flex:none!important}
+.bcpg-hero{background:radial-gradient(ellipse at top right,#3c647155,transparent 70%),#1b2b3e;border:1px solid #ffffff12;border-radius:16px;padding:24px;margin-bottom:24px}.bcpg-eyebrow{font-size:11px;letter-spacing:2.5px;color:#a5d9cf}.bcpg-hero h2{font-size:30px;margin:10px 0}.bcpg-hero p,.bcpg-rules p{color:#aebdd0;font-size:14px;line-height:1.7;margin:8px 0 16px}.bcpg-badge{display:inline-block;font-size:12px;padding:5px 10px;border-radius:20px;background:#ffffff0b;color:#b7d7d7;font-weight:500}
+.bcpg-lounge h3{font-size:15px;margin:0 0 14px}.bcpg-lounge section{margin-bottom:20px}.bcpg-lobby-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}.bcpg-player-list{display:grid;gap:9px}.bcpg-player{display:flex;gap:12px;align-items:center;background:#1b293b;border:1px solid #ffffff0c;padding:12px;border-radius:12px;min-width:0}.bcpg-avatar{width:44px;height:44px;border-radius:13px;background:#345260;display:grid;place-items:center;flex:none;font-size:20px;overflow:hidden}.bcpg-avatar img{width:100%;height:100%;object-fit:cover}.bcpg-player-info{flex:1;min-width:0}.bcpg-player strong{display:block;overflow-wrap:anywhere;font-size:14px}.bcpg-player small{display:block;color:#9fb2c9;font-size:12px;margin-top:5px}.bcpg-player button{flex:none}
+.bcpg-rules{background:#142232;border:1px solid #ffffff12;border-radius:14px;padding:18px}.bcpg-rules label{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:9px 0;border-top:1px solid #ffffff0b;font-size:13px}.bcpg-rules select{background:#24354b;color:#e9eef7;border:1px solid #486077;border-radius:7px;padding:5px;min-width:70px}.bcpg-rules input{accent-color:#a5dfce;width:18px;height:18px}.bcpg-rules small{display:block;color:#91a8bc;font-size:12px;line-height:1.7;margin-top:12px}.bcpg-rules :disabled{opacity:.7}
+.bcpg-toolbar{background:#142131;border-top:1px solid #ffffff12;padding:14px;gap:10px}.bcpg-toolbar button,.bcpg-lounge button{border:1px solid #638a89;border-radius:9px;background:#285451;color:#eafff9;padding:9px 14px;font:600 13px inherit;cursor:pointer;min-height:38px}.bcpg-toolbar button:hover,.bcpg-lounge button:hover{background:#386e68}.bcpg-toolbar button:disabled,.bcpg-lounge button:disabled{opacity:.45;cursor:not-allowed}#bcpg-overlay button:focus-visible,#bcpg-overlay select:focus-visible,#bcpg-overlay input:focus-visible{outline:2px solid #ead8a5;outline-offset:3px}.bcpg-actions{display:flex;gap:10px}.bcpg-invitation{border:1px solid #87b9a7;background:#203d3a;border-radius:14px;padding:18px}.bcpg-invitation p{font-size:13px;line-height:1.8;color:#bfdcd4}.bcpg-notice,.bcpg-empty{padding:18px;color:#a7bbce;font-size:14px;line-height:1.8}.bcpg-notice{border:1px solid #557d92;border-radius:12px;margin-bottom:18px}
+.bcpg-lounge button,.bcpg-toolbar button{font-family:inherit;font-size:13px;font-weight:600}
+@media(max-width:650px){.bcpg-lounge{padding:14px}.bcpg-lobby-grid{grid-template-columns:1fr;gap:0}.bcpg-hero{padding:18px}.bcpg-hero h2{font-size:25px}.bcpg-title{padding:0 14px}.bcpg-toolbar{padding:10px}.bcpg-player{gap:8px}.bcpg-player button{padding:8px}.bcpg-window{border-radius:14px}}
 `;
         document.head.appendChild(style);
     }

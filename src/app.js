@@ -5,7 +5,7 @@
     if (window.Liko.BCPartyGames?.loaded || window.Liko.BCPartyGames?.loading) return;
 
     const API = window.Liko.BCPartyGames = window.Liko.BCPartyGames || {};
-    Object.assign(API, { version: "0.2.1", loading: true, loaded: false });
+    Object.assign(API, { version: "0.3.0", loading: true, loaded: false });
     const modules = root.BCPartyGamesModules;
     const LIKO_BASE = window.LikoDevBase || "https://raw.githubusercontent.com/awdrrawd/liko-Plugin-Repository/main/Plugins/";
     let modApi, transport, controller, ui, renderTimer;
@@ -72,13 +72,13 @@
     }
 
     function localMessage(key, vars) {
-        const text = t(key, vars);
+        const text = String(t(key, vars)).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
         if (typeof ChatRoomSendLocal === "function" && window.CurrentScreen === "ChatRoom") ChatRoomSendLocal(`<b>[PartyGames]</b> ${text}`, 8000);
         else console.log(`[BC PartyGames] ${text}`);
     }
 
     function notify(key, vars) {
-        const known = ["lobbyCreated", "voteCooldown", "notYourTurn", "illegalCard", "chooseColorError", "inviteReceived", "inviteDeclined", "inviteDelivered", "inviteNoResponse"];
+        const known = ["lobbyCreated", "voteCooldown", "notYourTurn", "illegalCard", "chooseColorError", "inviteReceived", "inviteDeclined", "inviteDelivered", "inviteNoResponse", "joinFailed", "mustPlay", "wild4HasColor"];
         if (key === "chooseColor") key = "chooseColorError";
         if (key === "inviteReceived") setTimeout(() => ui?.toggle(true), 0);
         localMessage(known.includes(key) ? key : "genericError", known.includes(key) ? vars : { error: key });
@@ -140,6 +140,7 @@
         controller.start();
         ui = new modules.ui.GameUI({ controller, t });
         ui.mount();
+        ui.installAvatarHooks(modApi);
         installChatButton();
         installCommand();
         renderTimer = setInterval(() => ui?.opened && ui.render(), 500);

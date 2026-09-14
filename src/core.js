@@ -30,6 +30,18 @@
         return `${prefix}-${random}`;
     }
 
+    function normalizeRules(rules = {}) {
+        if (!rules || typeof rules !== "object") rules = {};
+        const result = { ...DEFAULT_RULES };
+        for (const [key, min, max] of [["startingHandSize", 3, 9], ["turnSeconds", 15, 120], ["reconnectSeconds", 15, 180], ["voteSeconds", 15, 120], ["voteCooldownSeconds", 30, 600]]) {
+            const value = Number(rules[key]);
+            if (Number.isFinite(value)) result[key] = Math.max(min, Math.min(max, Math.round(value)));
+        }
+        for (const key of ["stacking", "drawUntilPlayable", "playDrawnCard", "forcePlay", "strictWildFour"]) result[key] = rules[key] === true;
+        if (rules.playDrawnCard == null) result.playDrawnCard = true;
+        return result;
+    }
+
     function createDeck() {
         const cards = [];
         for (const color of COLORS) {
@@ -61,7 +73,7 @@
 
     function nextPlayerIndex(state, steps = 1, from = state.turnIndex) {
         const count = state.players.length;
-        if (!count) return -1;
+        if (!count || state.players.every(p => p.status === "lost")) return -1;
         let index = from;
         for (let moved = 0; moved < steps;) {
             index = (index + state.direction + count) % count;
@@ -93,6 +105,7 @@
 
     function canPlayCard(card, state) {
         if (!card || state.phase !== "playing") return false;
+        if (state.pendingDraw) return state.rules.stacking && card.kind === state.pendingDrawKind;
         if (card.color === "wild") return true;
         const top = state.discardPile[state.discardPile.length - 1];
         return card.color === state.activeColor
@@ -104,7 +117,7 @@
         return hand.some(card => card.id !== excludedCardId && card.color === activeColor);
     }
 
-    function applyInitialCard(state) {
+    function applyInitialCard(state, random = Math.random) {
         let guard = state.drawPile.length;
         while (guard-- > 0) {
             const card = state.drawPile.pop();
@@ -114,16 +127,16 @@
                 continue;
             }
             state.discardPile.push(card);
-            state.activeColor = card.color === "wild" ? COLORS[Math.floor(Math.random() * COLORS.length)] : card.color;
+            state.activeColor = card.color === "wild" ? COLORS[Math.floor(random() * COLORS.length)] : card.color;
             if (card.kind === "reverse") {
                 state.direction = -1;
-                if (state.players.length === 2) state.turnIndex = nextPlayerIndex(state);
+                state.turnIndex = state.players.length - 1;
             } else if (card.kind === "skip") {
                 state.turnIndex = nextPlayerIndex(state);
             } else if (card.kind === "draw2") {
-                const target = state.players[nextPlayerIndex(state)];
-                drawCards(state, target.memberNumber, 2);
-                state.turnIndex = nextPlayerIndex(state, 2);
+                const target = state.players[state.turnIndex];
+                drawCards(state, target.memberNumber, 2, random);
+                state.turnIndex = nextPlayerIndex(state);
             }
             return;
         }
@@ -132,6 +145,9 @@
 
     function createGame({ hostId, players, rules = {}, random = Math.random }) {
         if (!Array.isArray(players) || players.length < 2 || players.length > 10) throw new Error("UNO requires 2-10 players");
+        if (players.some(p => !Number.isSafeInteger(Number(p.memberNumber)) || Number(p.memberNumber) <= 0)
+            || new Set(players.map(p => Number(p.memberNumber))).size !== players.length
+            || !players.some(p => Number(p.memberNumber) === Number(hostId))) throw new Error("Invalid players");
         const normalizedPlayers = players.map(player => ({
             memberNumber: Number(player.memberNumber),
             name: String(player.name || player.memberNumber),
@@ -157,7 +173,9 @@
             drawnThisTurn: false,
             playableDrawnCardId: null,
             lastAction: null,
-            rules: { ...DEFAULT_RULES, ...rules },
+            rules: normalizeRules(rules),
+            pendingDraw: 0,
+            pendingDrawKind: null,
             vote: null,
             voteCooldowns: {},
             createdAt: Date.now(),
@@ -166,7 +184,7 @@
         for (let round = 0; round < state.rules.startingHandSize; round++) {
             for (const player of state.players) drawCards(state, player.memberNumber, 1, random);
         }
-        applyInitialCard(state);
+        applyInitialCard(state, random);
         return state;
     }
 
@@ -182,7 +200,7 @@
         const card = hand[cardIndex];
         if (!canPlayCard(card, state)) return { ok: false, error: "illegalCard" };
         if (state.drawnThisTurn && state.playableDrawnCardId && card.id !== state.playableDrawnCardId) return { ok: false, error: "onlyDrawnCard" };
-        if (card.kind === "wild4" && state.rules.wildDrawFourChallenge && hasColorMatch(hand, state.activeColor, card.id)) {
+        if (card.kind === "wild4" && state.rules.strictWildFour && !state.pendingDraw && hasColorMatch(hand, state.activeColor, card.id)) {
             return { ok: false, error: "wild4HasColor" };
         }
         if (card.color === "wild" && !COLORS.includes(chosenColor)) return { ok: false, error: "chooseColor" };
@@ -195,6 +213,8 @@
         state.lastAction = { type: "play", memberNumber: id, card, chosenColor: state.activeColor, uno: hand.length === 1 };
 
         if (hand.length === 0) {
+            if (card.kind === "draw2" || card.kind === "wild4") drawCards(state, state.players[nextPlayerIndex(state)].memberNumber, (state.pendingDraw || 0) + (card.kind === "draw2" ? 2 : 4));
+            state.pendingDraw = 0; state.pendingDrawKind = null;
             state.phase = "finished";
             state.winnerId = id;
             return { ok: true, won: true, card };
@@ -210,34 +230,53 @@
             const amount = card.kind === "draw2" ? 2 : 4;
             const targetIndex = nextPlayerIndex(state);
             const target = state.players[targetIndex];
-            drawCards(state, target.memberNumber, amount);
-            advance = 2;
+            if (state.rules.stacking) {
+                state.pendingDraw = (state.pendingDraw || 0) + amount;
+                state.pendingDrawKind = card.kind;
+            } else {
+                drawCards(state, target.memberNumber, amount);
+                advance = 2;
+            }
         }
         state.turnIndex = nextPlayerIndex(state, advance);
         return { ok: true, card };
     }
 
-    function drawForTurn(state, memberNumber) {
+    function drawForTurn(state, memberNumber, { timeout = false } = {}) {
         const id = Number(memberNumber);
         if (state.phase !== "playing") return { ok: false, error: "notPlaying" };
         if (currentPlayer(state)?.memberNumber !== id) return { ok: false, error: "notYourTurn" };
         if (state.drawnThisTurn) return { ok: false, error: "alreadyDrew" };
-        const drawn = drawCards(state, id, 1);
-        if (!drawn.length) return { ok: false, error: "deckEmpty" };
-        const playable = canPlayCard(drawn[0], state);
+        if (state.pendingDraw) {
+            const drawn = drawCards(state, id, state.pendingDraw);
+            state.pendingDraw = 0; state.pendingDrawKind = null;
+            state.lastAction = { type: "draw", memberNumber: id, count: drawn.length };
+            state.turnIndex = nextPlayerIndex(state);
+            return { ok: true, playable: false };
+        }
+        const legal = card => canPlayCard(card, state) && !(card.kind === "wild4" && state.rules.strictWildFour && hasColorMatch(state.hands[String(id)], state.activeColor, card.id));
+        if (!timeout && state.rules.forcePlay && state.hands[String(id)].some(legal)) return { ok: false, error: "mustPlay" };
+        const drawn = [];
+        do {
+            const batch = drawCards(state, id, 1);
+            if (!batch.length) break;
+            drawn.push(batch[0]);
+        } while (state.rules.drawUntilPlayable && !legal(drawn.at(-1)));
+        const last = drawn.at(-1);
+        const playable = !!last && legal(last);
         state.drawnThisTurn = true;
-        state.playableDrawnCardId = playable && state.rules.playDrawnCard ? drawn[0].id : null;
-        state.lastAction = { type: "draw", memberNumber: id, count: 1 };
+        state.playableDrawnCardId = playable && state.rules.playDrawnCard ? last.id : null;
+        state.lastAction = { type: "draw", memberNumber: id, count: drawn.length };
         if (!state.playableDrawnCardId) {
             state.drawnThisTurn = false;
             state.turnIndex = nextPlayerIndex(state);
         }
-        return { ok: true, card: drawn[0], playable: !!state.playableDrawnCardId };
+        return { ok: true, card: last, playable: !!state.playableDrawnCardId };
     }
 
     function passAfterDraw(state, memberNumber) {
         const id = Number(memberNumber);
-        if (currentPlayer(state)?.memberNumber !== id || !state.drawnThisTurn) return { ok: false, error: "cannotPass" };
+        if (state.phase !== "playing" || currentPlayer(state)?.memberNumber !== id || !state.drawnThisTurn) return { ok: false, error: "cannotPass" };
         state.drawnThisTurn = false;
         state.playableDrawnCardId = null;
         state.lastAction = { type: "pass", memberNumber: id };
@@ -248,17 +287,21 @@
     function removePlayer(state, memberNumber, random = Math.random) {
         const id = Number(memberNumber);
         const index = state.players.findIndex(p => p.memberNumber === id);
-        if (index < 0) return false;
+        if (index < 0 || state.players[index].status === "lost") return false;
         const hand = state.hands[String(id)] || [];
         state.drawPile = shuffle(state.drawPile.concat(hand), random);
         state.hands[String(id)] = [];
         state.players[index].status = "lost";
         state.players[index].disconnectedAt = null;
-        if (state.turnIndex === index) state.turnIndex = nextPlayerIndex(state);
+        if (state.turnIndex === index) {
+            state.turnIndex = nextPlayerIndex(state);
+            state.drawnThisTurn = false; state.playableDrawnCardId = null;
+            state.turnStartedAt = Date.now();
+        }
         const alive = state.players.filter(p => p.status !== "lost");
-        if (alive.length === 1) {
+        if (alive.length <= 1) {
             state.phase = "finished";
-            state.winnerId = alive[0].memberNumber;
+            state.winnerId = alive[0]?.memberNumber ?? null;
         }
         return true;
     }
@@ -273,7 +316,7 @@
     }
 
     return {
-        COLORS, DEFAULT_RULES, makeId, createDeck, shuffle, createGame, currentPlayer,
+        COLORS, DEFAULT_RULES, normalizeRules, makeId, createDeck, shuffle, createGame, currentPlayer,
         nextPlayerIndex, canPlayCard, playCard, drawForTurn, passAfterDraw, drawCards,
         removePlayer, publicView,
     };
