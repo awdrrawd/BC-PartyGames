@@ -1,5 +1,11 @@
 (function (root) {
     const strings = {
+        penaltyApplied: { TW: "{name} 已罰抽 {count} 張，跳過回合", CN: "{name} 已罚抽 {count} 张，跳过回合", EN: "{name} drew {count} penalty cards · turn skipped" },
+        takePenalty: { TW: "承受罰牌 +{count}", CN: "承受罚牌 +{count}", EN: "Take +{count} penalty" },
+        yourHand: { TW: "你的手牌 · {count} 張", CN: "你的手牌 · {count} 张", EN: "YOUR HAND · {count} cards" },
+        wildHint: { TW: "變色牌：選擇下一個顏色，不罰抽牌", CN: "变色牌：选择下一个颜色，不罚抽牌", EN: "Wild: choose the next color; no draw penalty" },
+        wildFourHint: { TW: "+4 萬用牌：選色後，下位罰抽 4 張並跳過", CN: "+4 万能牌：选色后，下位罚抽 4 张并跳过", EN: "Wild +4: next player draws four and skips their turn" },
+        wildFourStackHint: { TW: "+4 萬用牌：選色後累計罰牌，下位可接 +4 或承受", CN: "+4 万能牌：选色后累计罚牌，下位可接 +4 或承受", EN: "Wild +4: stack the penalty; next player may stack +4 or draw" },
         lobbyHint: { TW: "邀請同房玩家，確認規則並準備後即可開局。", CN: "邀请同房玩家，确认规则并准备后即可开局。", EN: "Invite room members, review the rules, and ready up." },
         playersLabel: { TW: "人", CN: "人", EN: "players" },
         cardsLabel: { TW: "張牌", CN: "张牌", EN: "cards" },

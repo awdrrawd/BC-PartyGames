@@ -100,6 +100,22 @@ test("restart replaces the game on both participants", () => {
     assert.equal(guest.controller.state.gameId, host.controller.state.gameId);
 });
 
+test("guest wild +4 request synchronizes the host's penalty hand", () => {
+    const { host, guest } = lobby();
+    host.controller.lobby.players[1].ready = true; host.controller.startGame();
+    host.controller.state.turnIndex = 1;
+    host.controller.state.hands["2"] = [{ id: "four", color: "wild", kind: "wild4" }, { id: "spare", color: "red", kind: "number", value: 2 }];
+    host.controller.commit("sync");
+    guest.controller.handle({ ...host.sent.at(-1), from: 1 });
+    const before = guest.controller.state.hands["1"].length;
+    guest.controller.requestPlay("four", "yellow");
+    host.controller.handle({ ...guest.sent.at(-1), from: 2 });
+    guest.controller.handle({ ...host.sent.at(-1), from: 1 });
+    assert.equal(guest.controller.state.hands["1"].length, before + 4);
+    assert.equal(host.controller.state.hands["1"].length, before + 4);
+    assert.equal(guest.controller.state.lastAction.penalty.count, 4);
+});
+
 test("timeout ends a turn when a drawn playable card is pending", () => {
     const { controller: c } = setup();
     c.state = core.createGame({ hostId: 1, players });

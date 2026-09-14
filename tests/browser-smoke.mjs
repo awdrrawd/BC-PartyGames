@@ -64,7 +64,17 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.evaluate(() => { demo.lobby.players.forEach(p => p.ready = true); demo.startGame(); });
+    await page.evaluate(() => {
+        demo.state.turnIndex = 0; demo.state.activeColor = "red";
+        demo.state.discardPile = [{ id: "preview-top", color: "red", kind: "number", value: 5 }];
+        demo.state.hands["1"] = [{ id: "preview-wild", color: "wild", kind: "wild" }, { id: "preview-four", color: "wild", kind: "wild4" }, ...demo.state.hands["1"].slice(0, 5)];
+        demo.changed();
+    });
     await page.screenshot({ path: path.join(root, "tests/ui-game.png") });
+    const handBefore = await page.evaluate(() => demo.state.hands["2"].length);
+    await page.evaluate(() => { demo.requestPlay("preview-four", "blue"); });
+    assert.equal(await page.evaluate(() => demo.state.hands["2"].length), handBefore + 4);
+    await page.screenshot({ path: path.join(root, "tests/ui-penalty.png") });
     await page.evaluate(() => {
         demo.state.phase = "finished"; demo.state.winnerId = 1; demo.changed();
     });

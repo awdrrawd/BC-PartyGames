@@ -40,9 +40,9 @@
             this.unsubscribeTransport = this.transport.on(packet => this.handle(packet));
             this.presenceTimer = setInterval(() => this.checkPresence(), 1000);
             this.tickTimer = setInterval(() => this.tick(), 500);
-            this.helloTimer = setInterval(() => this.transport.send("HELLO", { version: "0.3.0", name: this.localPlayer().name }), 10000);
+            this.helloTimer = setInterval(() => this.transport.send("HELLO", { version: "0.3.1", name: this.localPlayer().name }), 10000);
             this.checkPresence();
-            this.transport.send("HELLO", { version: "0.3.0", name: this.localPlayer().name });
+            this.transport.send("HELLO", { version: "0.3.1", name: this.localPlayer().name });
         }
 
         createLobby() {
@@ -368,7 +368,7 @@
             switch (packet.type) {
                 case "HELLO":
                     this.rememberPeer(sender, packet);
-                    this.transport.send("HELLO_ACK", { version: "0.3.0", name: this.localPlayer().name }, sender);
+                    this.transport.send("HELLO_ACK", { version: "0.3.1", name: this.localPlayer().name }, sender);
                     if (this.isHost() && this.lobby) this.broadcastLobby();
                     if (this.isHost() && this.state) this.commit("sync", {});
                     break;

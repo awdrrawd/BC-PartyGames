@@ -5,7 +5,7 @@
     if (window.Liko.BCPartyGames?.loaded || window.Liko.BCPartyGames?.loading) return;
 
     const API = window.Liko.BCPartyGames = window.Liko.BCPartyGames || {};
-    Object.assign(API, { version: "0.3.0", loading: true, loaded: false });
+    Object.assign(API, { version: "0.3.1", loading: true, loaded: false });
     const modules = root.BCPartyGamesModules;
     const LIKO_BASE = window.LikoDevBase || "https://raw.githubusercontent.com/awdrrawd/liko-Plugin-Repository/main/Plugins/";
     let modApi, transport, controller, ui, renderTimer;
@@ -100,16 +100,12 @@
     function installChatButton() {
         const helper = window.Liko?.__Sys_ChatRoomButtons__;
         if (!helper?.add) return;
-        helper.add("bcpg-chat-button", 25, () => {
-            const button = document.createElement("button");
-            button.id = "bcpg-chat-button";
-            button.type = "button";
-            button.title = t("title");
-            const image = document.createElement("img"); image.src = makeIcon(); image.alt = "UNO";
-            button.appendChild(image);
-            button.addEventListener("click", () => ui?.toggle());
-            return button;
-        }, { plain: true });
+        helper.add({
+            id: "bcpg-chat-button", buttonId: "bcpg-chat-button", order: 25,
+            icon: { src: makeIcon(), alt: "UNO" },
+            tooltip: t("title"), plain: true,
+            onClick: () => ui?.toggle(),
+        });
     }
 
     function installCommand() {
@@ -141,8 +137,9 @@
         ui = new modules.ui.GameUI({ controller, t });
         ui.mount();
         ui.installAvatarHooks(modApi);
-        installChatButton();
         installCommand();
+        try { installChatButton(); }
+        catch (error) { console.warn("[BC PartyGames] chat button unavailable; use /partygames", error); }
         renderTimer = setInterval(() => ui?.opened && ui.render(), 500);
 
         Object.assign(API, {

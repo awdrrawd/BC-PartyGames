@@ -53,6 +53,49 @@ test("strict wild four rejects a matching color without mutating the hand", () =
   assert.equal(state.hands["1"].length, 3);
 });
 
+for (const count of [2, 3]) test(`wild +4 draws four and skips the target with ${count} players`, () => {
+  const state = fixture(); state.players = state.players.slice(0, count);
+  state.hands["1"] = [{ id: "four", color: "wild", kind: "wild4" }, { id: "spare", color: "blue", kind: "number", value: 1 }];
+  const before = state.hands["2"].length;
+  assert.equal(core.playCard(state, 1, "four", "green").ok, true);
+  assert.equal(state.hands["2"].length, before + 4);
+  assert.equal(state.activeColor, "green");
+  assert.equal(state.turnIndex, count === 2 ? 0 : 2);
+  assert.deepEqual(state.lastAction.penalty, { memberNumber: 2, requested: 4, count: 4 });
+});
+
+test("ordinary wild changes color without a draw penalty", () => {
+  const state = fixture(); state.hands["1"].push({ id: "wild", color: "wild", kind: "wild" });
+  const before = state.hands["2"].length;
+  core.playCard(state, 1, "wild", "blue");
+  assert.equal(state.hands["2"].length, before);
+  assert.equal(state.lastAction.penalty, undefined);
+});
+
+test("wild +4 stacking draws eight when accepted", () => {
+  const state = fixture({ stacking: true });
+  for (const id of [1, 2]) state.hands[String(id)] = [{ id: `four${id}`, color: "wild", kind: "wild4" }, { id: `spare${id}`, color: "blue", kind: "number", value: 1 }];
+  core.playCard(state, 1, "four1", "green");
+  assert.equal(state.pendingDraw, 4);
+  core.playCard(state, 2, "four2", "red");
+  const before = state.hands["3"].length;
+  core.drawForTurn(state, 3);
+  assert.equal(state.hands["3"].length, before + 8);
+  assert.equal(state.lastAction.penalty.count, 8);
+});
+
+test("final wild +4 recycles the discard pile to complete its penalty", () => {
+  const state = fixture();
+  state.hands["1"] = [{ id: "last-four", color: "wild", kind: "wild4" }];
+  state.drawPile = [];
+  state.discardPile = Array.from({ length: 5 }, (_, i) => ({ id: `discard${i}`, color: "red", kind: "number", value: i }));
+  const before = state.hands["2"].length;
+  assert.equal(core.playCard(state, 1, "last-four", "blue").won, true);
+  assert.equal(state.hands["2"].length, before + 4);
+  assert.equal(state.lastAction.penalty.count, 4);
+  assert.equal(state.discardPile.at(-1).id, "last-four");
+});
+
 test("empty deck ends the turn instead of locking the game", () => {
   const state = fixture(); state.drawPile = [];
   assert.equal(core.drawForTurn(state, 1).ok, true);

@@ -190,6 +190,11 @@
 
     function currentPlayer(state) { return state.players[state.turnIndex] || null; }
 
+    function applyDrawPenalty(state, target, amount) {
+        const drawn = drawCards(state, target.memberNumber, amount);
+        state.lastAction.penalty = { memberNumber: target.memberNumber, requested: amount, count: drawn.length };
+    }
+
     function playCard(state, memberNumber, cardId, chosenColor) {
         const id = Number(memberNumber);
         if (state.phase !== "playing") return { ok: false, error: "notPlaying" };
@@ -213,7 +218,7 @@
         state.lastAction = { type: "play", memberNumber: id, card, chosenColor: state.activeColor, uno: hand.length === 1 };
 
         if (hand.length === 0) {
-            if (card.kind === "draw2" || card.kind === "wild4") drawCards(state, state.players[nextPlayerIndex(state)].memberNumber, (state.pendingDraw || 0) + (card.kind === "draw2" ? 2 : 4));
+            if (card.kind === "draw2" || card.kind === "wild4") applyDrawPenalty(state, state.players[nextPlayerIndex(state)], (state.pendingDraw || 0) + (card.kind === "draw2" ? 2 : 4));
             state.pendingDraw = 0; state.pendingDrawKind = null;
             state.phase = "finished";
             state.winnerId = id;
@@ -234,7 +239,7 @@
                 state.pendingDraw = (state.pendingDraw || 0) + amount;
                 state.pendingDrawKind = card.kind;
             } else {
-                drawCards(state, target.memberNumber, amount);
+                applyDrawPenalty(state, target, amount);
                 advance = 2;
             }
         }
@@ -248,9 +253,10 @@
         if (currentPlayer(state)?.memberNumber !== id) return { ok: false, error: "notYourTurn" };
         if (state.drawnThisTurn) return { ok: false, error: "alreadyDrew" };
         if (state.pendingDraw) {
+            const requested = state.pendingDraw;
             const drawn = drawCards(state, id, state.pendingDraw);
             state.pendingDraw = 0; state.pendingDrawKind = null;
-            state.lastAction = { type: "draw", memberNumber: id, count: drawn.length };
+            state.lastAction = { type: "draw", memberNumber: id, count: drawn.length, penalty: { memberNumber: id, requested, count: drawn.length } };
             state.turnIndex = nextPlayerIndex(state);
             return { ok: true, playable: false };
         }

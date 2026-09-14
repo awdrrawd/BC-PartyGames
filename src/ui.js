@@ -87,7 +87,7 @@
                 ? Math.min(1080, Math.max(820, viewportWidth - 40))
                 : Math.min(880, Math.max(280, viewportWidth - 24));
             const height = fullTable
-                ? 560
+                ? 680
                 : Math.min(380, Math.max(280, viewportHeight - 220));
             this.root?.classList.toggle("bcpg-compact", !fullTable);
             const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -225,10 +225,22 @@
         drawTable() {
             const ctx = this.ctx, w = this.width, h = this.height;
             const gradient = ctx.createRadialGradient(w / 2, h / 2, 40, w / 2, h / 2, Math.max(w, h));
-            gradient.addColorStop(0, "#255c59"); gradient.addColorStop(1, "#101f2b");
+            gradient.addColorStop(0, "#202a35"); gradient.addColorStop(1, "#080e17");
             ctx.fillStyle = gradient; ctx.fillRect(0, 0, w, h);
             ctx.strokeStyle = "rgba(255,255,255,.025)"; ctx.lineWidth = 1;
             for (let x = 0; x < w; x += 44) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+            ctx.save();
+            ctx.shadowColor = "#000b"; ctx.shadowBlur = 28; ctx.shadowOffsetY = 14;
+            this.roundRect(ctx, 38, 112, w - 76, 382, 180, "#202329", "#665640");
+            ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+            const felt = ctx.createRadialGradient(w / 2, 280, 10, w / 2, 280, w / 2);
+            felt.addColorStop(0, "#206457"); felt.addColorStop(1, "#0b342e");
+            this.roundRect(ctx, 53, 127, w - 106, 352, 165, felt, "#b19a65");
+            ctx.setLineDash([3, 6]); ctx.strokeStyle = "#d3c49a38"; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.roundRect(68, 142, w - 136, 322, 150); ctx.stroke();
+            ctx.setLineDash([]); ctx.textAlign = "center"; ctx.fillStyle = "#cbd6c91c"; ctx.font = "700 20px sans-serif";
+            ctx.fillText("P A R T Y   G A M E S", w / 2, 283);
+            ctx.restore();
         }
 
         drawWelcome({ peers, pendingInvite }) {
@@ -293,29 +305,38 @@
             ctx.fillText(this.t("deckCount", { count: state.drawPile.length }), w / 2, 82);
 
             const opponents = state.players.filter(p => p.memberNumber !== localId);
-            const spacing = w / Math.max(1, opponents.length);
+            const columns = Math.min(5, opponents.length);
+            const spacing = (w - 100) / Math.max(1, columns);
             opponents.forEach((player, i) => {
-                const x = spacing * i + spacing / 2, y = 105;
+                const row = Math.floor(i / columns), rowCount = Math.min(columns, opponents.length - row * columns);
+                const x = w / 2 + ((i % columns) - (rowCount - 1) / 2) * spacing, y = (opponents.length > 5 ? 105 : 147) + row * 88;
+                const seatW = Math.min(176, spacing - 10);
+                const isActive = player.memberNumber === active?.memberNumber && state.phase === "playing";
+                this.roundRect(ctx, x - seatW / 2, y - 12, seatW, 72, 14, isActive ? "#264a43" : "#131e29", isActive ? "#f3d48b" : "#47525b");
                 this.avatarUrl(player);
                 const avatar = this.avatarImages.get(player.memberNumber);
-                ctx.save(); ctx.beginPath(); ctx.arc(x, y + 35, 21, 0, Math.PI * 2); ctx.clip();
-                ctx.fillStyle = "#344c60"; ctx.fillRect(x - 21, y + 14, 42, 42);
-                if (avatar) ctx.drawImage(avatar, x - 21, y + 14, 42, 42);
-                else { ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif"; ctx.fillText(Array.from(player.name || "?")[0], x, y + 41); }
+                const ax = x - seatW / 2 + 27;
+                ctx.save(); ctx.beginPath(); ctx.arc(ax, y + 21, 19, 0, Math.PI * 2); ctx.clip();
+                ctx.fillStyle = "#344c60"; ctx.fillRect(ax - 19, y + 2, 38, 38);
+                if (avatar) ctx.drawImage(avatar, ax - 19, y + 2, 38, 38);
+                else { ctx.fillStyle = "#fff"; ctx.font = "18px sans-serif"; ctx.fillText(Array.from(player.name || "?")[0], ax, y + 27); }
                 ctx.restore();
                 const count = state.hands[String(player.memberNumber)]?.length || 0;
                 ctx.fillStyle = player.status === "disconnected" ? "#ffadad" : player.status === "lost" ? "#999" : "#fff";
-                ctx.font = "600 17px sans-serif";
+                ctx.font = "600 13px sans-serif";
                 let name = player.name;
-                const suffix = ` · ${this.t("cardsCount", { count })}`;
-                while (name.length > 1 && ctx.measureText(name + suffix).width > spacing - 12) name = name.slice(0, -1);
-                ctx.fillText(`${name}${name !== player.name ? "…" : ""}${suffix}`, x, y, spacing - 8);
-                if (player.memberNumber === state.hostId) { ctx.fillStyle = "#f7c948"; ctx.fillText("★", x + 28, y + 35); }
-                this.drawBacks(x, y + 64, Math.min(count, 12));
+                while (name.length > 1 && ctx.measureText(name).width > seatW - 70) name = name.slice(0, -1);
+                ctx.textAlign = "left";
+                ctx.fillText(`${name}${name !== player.name ? "…" : ""}`, ax + 27, y + 13, seatW - 60);
+                ctx.fillStyle = count === 1 ? "#ffe098" : "#a8bcbd";
+                ctx.fillText(`${this.t("cardsCount", { count })}${count === 1 ? " · UNO" : ""}`, ax + 27, y + 34, seatW - 60);
+                if (isActive) { ctx.fillStyle = "#edca7a"; ctx.fillRect(x - seatW / 2 + 12, y + 52, seatW - 24, 2); }
+                ctx.textAlign = "center";
+                if (player.memberNumber === state.hostId) { ctx.fillStyle = "#f7c948"; ctx.fillText("★", ax - 16, y - 4); }
             });
 
             const top = state.discardPile[state.discardPile.length - 1];
-            const centerY = 236, deckX = w / 2 - 132, discardX = w / 2 + 36;
+            const centerY = 298, deckX = w / 2 - 130, discardX = w / 2 + 32;
             this.drawDeck(ctx, deckX, centerY, 96, 140, state.drawPile.length);
             this.drawCard(ctx, top, discardX, centerY, 96, 140, false);
             ctx.fillStyle = CARD_COLORS[state.activeColor] || "#fff";
@@ -323,14 +344,24 @@
             ctx.strokeStyle = "#fff"; ctx.stroke();
             ctx.fillStyle = "#fff"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
             ctx.fillText(this.t("color_" + state.activeColor), discardX + 120, centerY + 104);
-            if (state.pendingDraw) ctx.fillText(this.t("pendingDraw", { count: state.pendingDraw }), w / 2, centerY - 12);
+            if (state.pendingDraw) ctx.fillText(this.t("pendingDraw", { count: state.pendingDraw }), w / 2, centerY - 10);
+            const penalty = state.lastAction?.penalty;
+            if (penalty) {
+                const target = state.players.find(p => p.memberNumber === penalty.memberNumber);
+                this.roundRect(ctx, w / 2 - 245, 481, 490, 32, 16, "#3a2d1c", "#af9157");
+                ctx.fillStyle = "#ffe3a4"; ctx.font = "600 14px sans-serif";
+                ctx.fillText(this.t("penaltyApplied", { name: target?.name || penalty.memberNumber, count: penalty.count }), w / 2, 502, 466);
+            }
             if (state.phase === "playing" && active?.memberNumber === localId && !state.drawnThisTurn) {
                 ctx.fillStyle = "#fff"; ctx.font = "700 15px sans-serif"; ctx.textAlign = "center";
-                ctx.fillText(this.t("clickToDraw"), deckX + 48, centerY + 162);
+                ctx.fillText(state.pendingDraw ? this.t("takePenalty", { count: state.pendingDraw }) : this.t("clickToDraw"), deckX + 48, centerY + 162);
                 this.hitWelcomeActions.push({ x: deckX - 8, y: centerY - 8, w: 112, h: 178, action: "draw" });
             }
 
             const hand = state.hands[String(localId)] || [];
+            this.roundRect(ctx, 22, h - 148, w - 44, 140, 18, "#101923", "#344047");
+            ctx.textAlign = "left"; ctx.fillStyle = "#c8baa0"; ctx.font = "600 12px sans-serif";
+            ctx.fillText(this.t("yourHand", { count: hand.length }), 34, h - 157);
             const cardW = 82, cardH = 120;
             const available = w - 70;
             const step = hand.length <= 1 ? cardW : Math.min(cardW + 8, (available - cardW) / (hand.length - 1));
@@ -380,15 +411,34 @@
             if (card.color === "wild") ctx.fillStyle = "#111";
             ctx.font = `900 ${Math.floor(w * .42)}px sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
             if (card.kind === "draw2" || card.kind === "wild4") this.drawDrawCardSymbol(ctx, card, x, y, w, h);
+            else if (card.kind === "wild") this.drawWildSymbol(ctx, x + w / 2, y + h / 2, w * .29);
             else ctx.fillText(label, x + w / 2, y + h / 2);
+            ctx.shadowBlur = 0; ctx.fillStyle = card.color === "yellow" ? "#273139" : "#fff";
+            ctx.font = `800 ${Math.round(w * .19)}px sans-serif`; ctx.textAlign = "left";
+            const corner = card.kind === "wild" ? "◆" : label;
+            ctx.fillText(corner, x + 10, y + 17);
+            ctx.translate(x + w - 10, y + h - 17); ctx.rotate(Math.PI); ctx.fillText(corner, 0, 0);
+            ctx.restore();
+        }
+
+        drawWildSymbol(ctx, cx, cy, radius) {
+            ctx.save(); ctx.translate(cx, cy); ctx.rotate(-Math.PI / 7);
+            core.COLORS.forEach((color, i) => {
+                const start = i * Math.PI / 2;
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, radius, start, start + Math.PI / 2); ctx.closePath();
+                ctx.fillStyle = CARD_COLORS[color]; ctx.fill(); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke();
+            });
             ctx.restore();
         }
 
         drawDrawCardSymbol(ctx, card, x, y, w, h) {
             const colors = card.kind === "wild4" ? ["red", "yellow", "green", "blue"] : [card.color, card.color];
             colors.forEach((color, i) => {
-                const cols = colors.length === 4 ? 2 : 2, row = colors.length === 4 ? Math.floor(i / 2) : 0, col = i % cols;
-                this.roundRect(ctx, x + w * .28 + col * w * .22, y + h * .28 + row * h * .14, w * .2, h * .28, 3, CARD_COLORS[color], "#fff");
+                ctx.save(); ctx.translate(x + w * .5 + (i - (colors.length - 1) / 2) * w * .12, y + h * .46);
+                ctx.rotate((i - (colors.length - 1) / 2) * .2);
+                ctx.shadowColor = "#0008"; ctx.shadowBlur = 3;
+                this.roundRect(ctx, -w * .12, -h * .17, w * .24, h * .34, 3, CARD_COLORS[color], "#fff");
+                ctx.restore();
             });
             ctx.fillStyle = "#111"; ctx.font = `900 ${Math.floor(w * .28)}px sans-serif`; ctx.textAlign = "center";
             ctx.fillText(card.kind === "wild4" ? "+4" : "+2", x + w / 2, y + h * .76);
@@ -427,6 +477,10 @@
             const ctx = this.ctx, cx = this.width / 2, cy = this.height / 2, radius = Math.min(105, this.height * .22);
             ctx.save(); ctx.fillStyle = "rgba(0,0,0,.76)"; ctx.fillRect(0, 0, this.width, this.height);
             ctx.fillStyle = "#fff"; ctx.font = "700 24px sans-serif"; ctx.textAlign = "center"; ctx.fillText(this.t("chooseColor"), cx, cy - radius - 24);
+            const state = this.controller.state;
+            const card = state?.hands[String(this.controller.localId)]?.find(c => c.id === this.pendingWildCardId);
+            ctx.font = "15px sans-serif";
+            ctx.fillText(this.t(card?.kind === "wild4" ? (state.rules.stacking ? "wildFourStackHint" : "wildFourHint") : "wildHint"), cx, cy + radius + 35, this.width - 60);
             core.COLORS.forEach((color, index) => {
                 const start = -Math.PI / 2 + index * Math.PI / 2;
                 ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, radius, start, start + Math.PI / 2); ctx.closePath();
@@ -459,7 +513,7 @@
             }
             if (state) {
                 const myTurn = state.phase === "playing" && core.currentPlayer(state)?.memberNumber === localId;
-                if (myTurn && !state.drawnThisTurn) buttons.push(["draw", "drawCard"]);
+                if (myTurn && !state.drawnThisTurn) buttons.push(["draw", state.pendingDraw ? "takePenalty" : "drawCard"]);
                 if (myTurn && state.drawnThisTurn) buttons.push(["pass", "pass"]);
                 if (state.phase === "finished") { buttons.push(["vote-restart", "voteRestart", !!state.vote]); buttons.push(["leave", "leave"]); }
                 if (state.vote && state.vote.votes[String(localId)] == null) {
@@ -467,7 +521,7 @@
                 }
             }
             buttons.push(["close", "close"]);
-            const markup = buttons.map(([act, key, disabled]) => `<button data-act="${act}" ${disabled ? "disabled" : ""}>${escapeHtml(this.t(key))}</button>`).join("");
+            const markup = buttons.map(([act, key, disabled]) => `<button data-act="${act}" ${disabled ? "disabled" : ""}>${escapeHtml(this.t(key, { count: state?.pendingDraw || 0 }))}</button>`).join("");
             if (this.toolbar.innerHTML !== markup) this.toolbar.innerHTML = markup;
         }
 
@@ -480,7 +534,7 @@
             if (act === "invite") return this.chooseInvitee();
             if (act === "invite-accept") return this.controller.acceptInvite();
             if (act === "invite-decline") return this.controller.declineInvite();
-            if (act === "refresh") return this.controller.transport.send("HELLO", { version: "0.3.0", name: this.controller.localPlayer().name });
+            if (act === "refresh") return this.controller.transport.send("HELLO", { version: "0.3.1", name: this.controller.localPlayer().name });
             if (act === "create") this.controller.createLobby();
             else if (act === "join") this.controller.joinLobby();
             else if (act === "start") this.controller.startGame();
